@@ -6,6 +6,7 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 import pickle  # Use built-in pickle instead of pickle5
 import io
+import random
 
 # Set page config
 st.set_page_config(
@@ -24,6 +25,135 @@ weather conditions, and crop types. Upload your irrigation machine data or use o
 # Sidebar for navigation
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", ["Home", "Data Analysis", "Irrigation Recommendations", "About"])
+
+# Reinforcement Learning Implementation
+class QLearningAgent:
+    def __init__(self, state_size, action_size, learning_rate=0.1, discount_factor=0.95, 
+                 exploration_rate=1.0, exploration_decay=0.995, min_exploration_rate=0.01):
+        self.state_size = state_size
+        self.action_size = action_size
+        self.learning_rate = learning_rate
+        self.discount_factor = discount_factor
+        self.exploration_rate = exploration_rate
+        self.exploration_decay = exploration_decay
+        self.min_exploration_rate = min_exploration_rate
+        
+        # Initialize Q-table with zeros
+        self.q_table = np.zeros((state_size, action_size))
+    
+    def choose_action(self, state):
+        # Exploration vs Exploitation
+        if random.uniform(0, 1) < self.exploration_rate:
+            # Explore: random action
+            return random.randint(0, self.action_size - 1)
+        else:
+            # Exploit: best action from Q-table
+            return np.argmax(self.q_table[state])
+    
+    def learn(self, state, action, reward, next_state, done):
+        # Current Q-value
+        current_q = self.q_table[state, action]
+        
+        if done:
+            target = reward
+        else:
+            # Maximum Q-value for next state
+            max_next_q = np.max(self.q_table[next_state])
+            target = reward + self.discount_factor * max_next_q
+        
+        # Update Q-value using Bellman equation
+        self.q_table[state, action] = current_q + self.learning_rate * (target - current_q)
+        
+        # Decay exploration rate
+        if not done:
+            self.exploration_rate = max(self.min_exploration_rate, 
+                                      self.exploration_rate * self.exploration_decay)
+    
+    def save_model(self, filepath):
+        with open(filepath, 'wb') as f:
+            pickle.dump({
+                'q_table': self.q_table,
+                'exploration_rate': self.exploration_rate
+            }, f)
+    
+    def load_model(self, filepath):
+        with open(filepath, 'rb') as f:
+            data = pickle.load(f)
+            self.q_table = data['q_table']
+            self.exploration_rate = data['exploration_rate']
+
+# Irrigation Environment for RL Training
+class IrrigationEnvironment:
+    def __init__(self, data):
+        self.data = data
+        self.current_step = 0
+        self.max_steps = len(data) - 1
+        
+        # Define state parameters from data
+        self.sensor_cols = [col for col in data.columns if 'sensor_' in col]
+        self.soil_moisture = data['sensor_0'].values / 15.0  # Normalize to 0-1
+        self.crop_types = data['crop_type'].values
+        
+        # Crop-specific optimal moisture levels
+        self.crop_optimal_moisture = {
+            'Wheat': 0.4,
+            'Corn': 0.5,
+            'Tomato': 0.6,
+            'Cotton': 0.5
+        }
+    
+    def reset(self):
+        self.current_step = 0
+        return self._get_state()
+    
+    def _get_state(self):
+        # Create state from current data
+        moisture_level = int(self.soil_moisture[self.current_step] * 10)  # 0-10
+        crop = self.crop_types[self.current_step]
+        crop_idx = ['Wheat', 'Corn', 'Tomato', 'Cotton'].index(crop)
+        
+        # Combine into state index
+        state = moisture_level * 10 + crop_idx
+        return min(state, 99)  # Ensure within bounds
+    
+    def step(self, action):
+        # Action: 0=no irrigation, 1=light, 2=medium, 3=heavy
+        current_moisture = self.soil_moisture[self.current_step]
+        current_crop = self.crop_types[self.current_step]
+        optimal_moisture = self.crop_optimal_moisture[current_crop]
+        
+        # Apply irrigation action
+        irrigation_amount = action * 0.1  # Convert action to water amount
+        new_moisture = min(1.0, current_moisture + irrigation_amount)
+        
+        # Calculate reward
+        reward = self._calculate_reward(new_moisture, optimal_moisture, irrigation_amount)
+        
+        # Move to next step
+        self.current_step += 1
+        done = self.current_step >= self.max_steps
+        
+        return self._get_state(), reward, done
+    
+    def _calculate_reward(self, moisture, optimal_moisture, water_used):
+        # Reward for maintaining optimal moisture
+        moisture_diff = abs(moisture - optimal_moisture)
+        if moisture_diff < 0.05:
+            moisture_reward = 10
+        elif moisture_diff < 0.1:
+            moisture_reward = 5
+        elif moisture_diff < 0.2:
+            moisture_reward = 0
+        else:
+            moisture_reward = -5
+        
+        # Penalty for water usage (encourage conservation)
+        water_penalty = -2 * water_used
+        
+        # Bonus for using less water when moisture is adequate
+        conservation_bonus = 3 if (water_used == 0 and moisture_diff < 0.1) else 0
+        
+        return moisture_reward + water_penalty + conservation_bonus
 
 # Load or upload data
 @st.cache_data
@@ -83,11 +213,44 @@ def preprocess_data(data):
     
     return data, scaler, kmeans
 
-# Load trained model (simplified version for demo)
+# Train RL model
+def train_rl_model(data, episodes=1000):
+    env = IrrigationEnvironment(data)
+    state_size = 100  # moisture(0-10) * crops(4) = 40 states, using 100 for buffer
+    action_size = 4   # 0: no irrigation, 1: light, 2: medium, 3: heavy
+    
+    agent = QLearningAgent(state_size, action_size)
+    
+    rewards_history = []
+    for episode in range(episodes):
+        state = env.reset()
+        total_reward = 0
+        done = False
+        
+        while not done:
+            action = agent.choose_action(state)
+            next_state, reward, done = env.step(action)
+            agent.learn(state, action, reward, next_state, done)
+            
+            total_reward += reward
+            state = next_state
+        
+        rewards_history.append(total_reward)
+        
+        if episode % 100 == 0:
+            print(f"Episode {episode}, Total Reward: {total_reward:.2f}, Exploration: {agent.exploration_rate:.3f}")
+    
+    return agent, rewards_history
+
+# Load trained model
 def load_model():
-    # For demo purposes, we'll create a simple model
-    # In production, you would load a pre-trained model
-    return None
+    try:
+        # Try to load pre-trained model
+        agent = QLearningAgent(100, 4)
+        agent.load_model('trained_irrigation_model.pkl')
+        return agent
+    except:
+        return None
 
 # Home page
 if page == "Home":
@@ -140,6 +303,32 @@ elif page == "Data Analysis":
         st.session_state.scaler = scaler
         st.session_state.kmeans = kmeans
     
+    # Train RL model
+    st.subheader("Reinforcement Learning Training")
+    if st.button("Train RL Model"):
+        with st.spinner("Training reinforcement learning model... This may take a few minutes."):
+            agent, rewards_history = train_rl_model(processed_data, episodes=500)
+            st.session_state.rl_agent = agent
+            st.session_state.training_rewards = rewards_history
+            
+            # Save the trained model
+            agent.save_model('trained_irrigation_model.pkl')
+            st.success("RL model trained successfully!")
+            
+            # Plot training progress
+            fig, ax = plt.subplots(figsize=(10, 4))
+            ax.plot(rewards_history)
+            ax.set_title('RL Training Progress')
+            ax.set_xlabel('Episode')
+            ax.set_ylabel('Total Reward')
+            ax.grid(True)
+            st.pyplot(fig)
+    
+    # Show trained model info if available
+    if 'rl_agent' in st.session_state:
+        st.info("✅ RL model is trained and ready for recommendations!")
+        st.write(f"Final exploration rate: {st.session_state.rl_agent.exploration_rate:.3f}")
+    
     st.subheader("Processed Data with Crop Types")
     st.dataframe(st.session_state.processed_data[['sensor_0', 'sensor_1', 'parcel_0', 'parcel_1', 'parcel_2', 'crop_type', 'state']].head())
     
@@ -165,6 +354,13 @@ elif page == "Irrigation Recommendations":
         st.warning("Please process data from the Data Analysis page first.")
         st.stop()
     
+    # Load or use trained RL model
+    if 'rl_agent' not in st.session_state:
+        st.session_state.rl_agent = load_model()
+        if st.session_state.rl_agent is None:
+            st.warning("No trained RL model found. Please train the model on the Data Analysis page first.")
+            st.stop()
+    
     # User input for recommendations
     st.subheader("Get Irrigation Recommendations")
     
@@ -185,13 +381,38 @@ elif page == "Irrigation Recommendations":
     with col4:
         moisture = st.slider("Soil Moisture Level", 0.0, 1.0, 0.4, 0.1)
     
-    # Get recommendation based on RL policy
+    # Get recommendation using RL model
     if st.button("Get Recommendation"):
-        # Simplified RL policy based on your trained model logic
-        growth_stages = ["Germination", "Vegetative", "Flowering", "Maturation"]
-        growth_idx = growth_stages.index(growth_stage)
+        # Convert user inputs to state representation
+        moisture_level = int(moisture * 10)
+        crop_idx = ["Wheat", "Corn", "Tomato", "Cotton"].index(crop)
+        growth_idx = ["Germination", "Vegetative", "Flowering", "Maturation"].index(growth_stage)
+        weather_idx = ["Sunny", "Cloudy", "Rainy", "Extreme Heat"].index(weather)
         
-        # Optimal moisture levels for different crops and growth stages
+        # Create state index (simplified for demo)
+        state = moisture_level * 10 + crop_idx
+        
+        # Use RL agent to choose action
+        action = st.session_state.rl_agent.choose_action(state)
+        
+        # Action mapping
+        action_names = {
+            0: "No irrigation",
+            1: "Light irrigation (0.1 units)",
+            2: "Medium irrigation (0.2 units)", 
+            3: "Heavy irrigation (0.3 units)"
+        }
+        
+        water_amounts = {0: 0.0, 1: 0.1, 2: 0.2, 3: 0.3}
+        recommended_water = water_amounts[action]
+        
+        # Display RL-based recommendation
+        st.success(f"**RL Recommendation:** {action_names[action]}")
+        
+        # Calculate optimal moisture for explanation
+        growth_stages = ["Germination", "Vegetative", "Flowering", "Maturation"]
+        growth_idx_calc = growth_stages.index(growth_stage)
+        
         crop_optimal_moisture = {
             "Wheat": [0.3, 0.4, 0.5, 0.4],
             "Corn": [0.4, 0.5, 0.6, 0.5],
@@ -199,7 +420,6 @@ elif page == "Irrigation Recommendations":
             "Cotton": [0.4, 0.5, 0.6, 0.4]
         }
         
-        # Weather impact factors
         weather_impact = {
             "Sunny": 0.15,
             "Cloudy": 0.08,
@@ -207,54 +427,26 @@ elif page == "Irrigation Recommendations":
             "Extreme Heat": 0.25
         }
         
-        optimal_moisture = crop_optimal_moisture[crop][growth_idx]
+        optimal_moisture = crop_optimal_moisture[crop][growth_idx_calc]
         moisture_deficit = optimal_moisture - moisture
         weather_factor = weather_impact[weather]
         
-        # Calculate recommended irrigation
-        base_irrigation = max(0, moisture_deficit)
-        recommended_water = min(0.3, base_irrigation + weather_factor)
-        
-        # Ensure non-negative
-        recommended_water = max(0, recommended_water)
-        
-        # Action mapping
-        action_names = {
-            0: "No irrigation",
-            1: "Light irrigation",
-            2: "Medium irrigation", 
-            3: "Heavy irrigation"
-        }
-        
-        # Determine action category
-        if recommended_water == 0:
-            action = 0
-        elif recommended_water <= 0.1:
-            action = 1
-        elif recommended_water <= 0.2:
-            action = 2
-        else:
-            action = 3
-        
-        st.success(f"**Recommendation:** {action_names[action]} ({recommended_water:.2f} units of water)")
-        
         # Display explanation
         st.info(f"""
-        **Decision Explanation:**
-        - Optimal moisture for {crop} ({growth_stage}): {optimal_moisture:.2f}
-        - Current moisture level: {moisture:.2f}
-        - Moisture deficit: {moisture_deficit:.2f}
-        - Weather impact ({weather}): {weather_factor:+.2f}
-        - Calculated irrigation need: {recommended_water:.2f} units
+        **Decision Explanation (RL Model):**
+        - Current state: Moisture={moisture:.2f}, Crop={crop}, Growth={growth_stage}, Weather={weather}
+        - RL Agent selected action: {action} ({action_names[action]})
+        - Q-value for chosen action: {st.session_state.rl_agent.q_table[state, action]:.2f}
+        - Exploration rate: {st.session_state.rl_agent.exploration_rate:.3f}
         """)
         
         # Visual representation
         fig, ax = plt.subplots(figsize=(10, 2))
-        bars = ax.barh(['Current', 'Optimal', 'Recommended'], 
+        bars = ax.barh(['Current Moisture', 'Optimal Moisture', 'Recommended Water'], 
                       [moisture, optimal_moisture, recommended_water], 
                       color=['lightblue', 'lightgreen', 'orange'])
         ax.set_xlim(0, 1)
-        ax.set_title('Moisture Levels and Recommendation')
+        ax.set_title('RL-Based Irrigation Recommendation')
         
         # Add value labels on bars
         for bar in bars:
@@ -265,19 +457,28 @@ elif page == "Irrigation Recommendations":
         st.pyplot(fig)
         
         # Additional insights
-        st.subheader("Additional Insights")
+        st.subheader("RL Model Insights")
+        
+        # Show Q-values for all actions in current state
+        st.write("**Q-values for all possible actions in current state:**")
+        q_values = st.session_state.rl_agent.q_table[state]
+        action_df = pd.DataFrame({
+            'Action': ['No irrigation', 'Light', 'Medium', 'Heavy'],
+            'Q-value': q_values
+        })
+        st.dataframe(action_df)
         
         if moisture < optimal_moisture - 0.1:
-            st.warning("⚠️ **Warning:** Soil is too dry! Consider increasing irrigation.")
+            st.warning("⚠️ **Warning:** Soil is too dry! RL model recommends irrigation.")
         elif moisture > optimal_moisture + 0.1:
-            st.warning("⚠️ **Warning:** Soil is too wet! Consider reducing irrigation.")
+            st.warning("⚠️ **Warning:** Soil is too wet! RL model recommends no irrigation.")
         else:
             st.success("✅ Soil moisture is within optimal range.")
         
         if weather == "Extreme Heat":
-            st.info("🌡️ **Note:** Extreme heat conditions increase water evaporation. Monitor soil moisture closely.")
+            st.info("🌡️ **Note:** Extreme heat conditions increase water evaporation. RL model accounts for this.")
         elif weather == "Rainy":
-            st.info("🌧️ **Note:** Rainy conditions may reduce irrigation needs. Check soil moisture before watering.")
+            st.info("🌧️ **Note:** Rainy conditions may reduce irrigation needs. RL model considers weather impact.")
 
 # About page
 elif page == "About":
@@ -314,8 +515,16 @@ elif page == "About":
     st.subheader("Reinforcement Learning Approach")
     st.markdown("""
     The system uses Q-learning with:
-    - **State space**: Sensor clusters + moisture levels + weather + crop type + growth stage
+    - **State space**: Moisture levels + crop types + weather conditions + growth stages
     - **Action space**: 4 irrigation levels (0.0, 0.1, 0.2, 0.3 units)
     - **Reward function**: Balances crop health and water conservation
     - **Exploration**: ε-greedy strategy with decay
+    - **Q-table**: 100 states × 4 actions learning matrix
+    
+    ### RL Training Process:
+    1. **State Representation**: Convert sensor data and conditions to discrete states
+    2. **Action Selection**: Choose irrigation action using ε-greedy policy
+    3. **Reward Calculation**: Evaluate action based on moisture levels and water usage
+    4. **Q-value Update**: Update policy using Bellman equation
+    5. **Exploration Decay**: Gradually reduce random actions as learning progresses
     """)
