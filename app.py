@@ -84,6 +84,7 @@ class QLearningAgent:
             self.exploration_rate = data['exploration_rate']
 
 # Improved Irrigation Environment with Better Reward Shaping
+# Improved Irrigation Environment with Better Reward Shaping
 class IrrigationEnvironment:
     def __init__(self, data):
         self.data = data
@@ -147,46 +148,45 @@ class IrrigationEnvironment:
         return self._get_state(), reward, done
     
     def _calculate_reward(self, moisture, optimal_moisture, water_used, sensitivity):
-    # More nuanced reward function - FIXED VERSION
-    moisture_diff = abs(moisture - optimal_moisture)
-    
-    # Progressive reward for moisture levels - INCREASED POSITIVE REWARDS
-    if moisture_diff < 0.02:
-        moisture_reward = 50 * sensitivity  # Excellent - INCREASED from 15
-    elif moisture_diff < 0.05:
-        moisture_reward = 30 * sensitivity  # Good - INCREASED from 10
-    elif moisture_diff < 0.1:
-        moisture_reward = 15 * sensitivity  # Acceptable - INCREASED from 5
-    elif moisture_diff < 0.2:
-        moisture_reward = -2 * sensitivity  # Poor - REDUCED from -3
-    else:
-        moisture_reward = -5 * sensitivity  # Very poor - REDUCED from -8
-    
-    # Progressive penalty for water usage - REDUCED PENALTIES
-    if water_used == 0:
-        water_penalty = 3  # Small bonus for conservation - INCREASED from 2
-    elif water_used <= 0.1:
-        water_penalty = -0.5  # REDUCED from -1
-    elif water_used <= 0.2:
-        water_penalty = -1  # REDUCED from -2
-    else:
-        water_penalty = -2  # REDUCED from -4
-    
-    # Bonus for using appropriate water amount for the situation
-    if moisture < optimal_moisture - 0.1 and water_used > 0:
-        situation_bonus = 5  # Good: irrigating when dry - INCREASED from 3
-    elif moisture > optimal_moisture + 0.1 and water_used == 0:
-        situation_bonus = 5  # Good: not irrigating when wet - INCREASED from 3
-    elif moisture > optimal_moisture + 0.1 and water_used > 0:
-        situation_bonus = -3  # Bad: irrigating when already wet - REDUCED from -5
-    else:
-        situation_bonus = 1  # Small bonus for neutral situations - CHANGED from 0
-    
-    total_reward = moisture_reward + water_penalty + situation_bonus
-    
-    # Ensure reward is never too negative
-    return max(total_reward, -10)  # Prevent extremely negative rewards
-
+        # More nuanced reward function - FIXED VERSION
+        moisture_diff = abs(moisture - optimal_moisture)
+        
+        # Progressive reward for moisture levels - INCREASED POSITIVE REWARDS
+        if moisture_diff < 0.02:
+            moisture_reward = 50 * sensitivity  # Excellent - INCREASED from 15
+        elif moisture_diff < 0.05:
+            moisture_reward = 30 * sensitivity  # Good - INCREASED from 10
+        elif moisture_diff < 0.1:
+            moisture_reward = 15 * sensitivity  # Acceptable - INCREASED from 5
+        elif moisture_diff < 0.2:
+            moisture_reward = -2 * sensitivity  # Poor - REDUCED from -3
+        else:
+            moisture_reward = -5 * sensitivity  # Very poor - REDUCED from -8
+        
+        # Progressive penalty for water usage - REDUCED PENALTIES
+        if water_used == 0:
+            water_penalty = 3  # Small bonus for conservation - INCREASED from 2
+        elif water_used <= 0.1:
+            water_penalty = -0.5  # REDUCED from -1
+        elif water_used <= 0.2:
+            water_penalty = -1  # REDUCED from -2
+        else:
+            water_penalty = -2  # REDUCED from -4
+        
+        # Bonus for using appropriate water amount for the situation
+        if moisture < optimal_moisture - 0.1 and water_used > 0:
+            situation_bonus = 5  # Good: irrigating when dry - INCREASED from 3
+        elif moisture > optimal_moisture + 0.1 and water_used == 0:
+            situation_bonus = 5  # Good: not irrigating when wet - INCREASED from 3
+        elif moisture > optimal_moisture + 0.1 and water_used > 0:
+            situation_bonus = -3  # Bad: irrigating when already wet - REDUCED from -5
+        else:
+            situation_bonus = 1  # Small bonus for neutral situations - CHANGED from 0
+        
+        total_reward = moisture_reward + water_penalty + situation_bonus
+        
+        # Ensure reward is never too negative
+        return max(total_reward, -10)  # Prevent extremely negative rewards
 # Load or upload data
 @st.cache_data
 def load_data(uploaded_file=None):
@@ -251,7 +251,8 @@ def train_rl_model(data, episodes=1000):
     state_size = 80  # More granular states (20 moisture levels × 4 crops)
     action_size = 4   # 0: no irrigation, 1: light, 2: medium, 3: heavy
     
-    agent = QLearningAgent(state_size, action_size, learning_rate=0.05)  # Higher learning rate
+    # REDUCED LEARNING RATE for stability
+    agent = QLearningAgent(state_size, action_size, learning_rate=0.05)  # WAS 0.2
     
     rewards_history = []
     action_distribution = {0: 0, 1: 0, 2: 0, 3: 0}  # Track action choices
